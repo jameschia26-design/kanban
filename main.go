@@ -18,7 +18,7 @@ import (
 	_ "modernc.org/sqlite"
 )
 
-//go:embed ui.html
+//go:embed ui.html assets
 var uiFS embed.FS
 
 const statuses = "backlog,plan_ready,fixing,review,done"
@@ -283,6 +283,34 @@ func handleAPI() http.Handler {
 		}
 		jsonOut(w, a)
 	})
+	mux.HandleFunc("PATCH /api/apps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Kanban-Human") != "1" {
+			http.Error(w, "harness may not edit apps", http.StatusForbidden)
+			return
+		}
+		id := r.PathValue("id")
+		var a App
+		if err := json.NewDecoder(r.Body).Decode(&a); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		name := strings.TrimSpace(a.Name)
+		if name == "" {
+			http.Error(w, "name required", 400)
+			return
+		}
+		res, err := db.Exec(`UPDATE apps SET name=?, repo_path=? WHERE id=?`, name, strings.TrimSpace(a.RepoPath), id)
+		if err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if n, _ := res.RowsAffected(); n == 0 {
+			http.Error(w, "no such app", 404)
+			return
+		}
+		notify()
+		jsonOut(w, query(`SELECT id,name,source,COALESCE(repo_path,'') repo_path FROM apps WHERE id=?`, id))
+	})
 	mux.HandleFunc("GET /api/apps/{id}/issues", func(w http.ResponseWriter, r *http.Request) {
 		jsonOut(w, query(`SELECT id,app_id,title,description,plan,review_notes,status,updated_at
 			FROM issues WHERE app_id=? ORDER BY id DESC`, r.PathValue("id")))
@@ -464,6 +492,18 @@ func patchIssue(id string, patch Issue, human bool) (Issue, error) {
 	return cur, nil
 }
 
+func mimeByExt(name string) string {
+	switch strings.ToLower(filepath.Ext(name)) {
+	case ".svg":
+		return "image/svg+xml"
+	case ".png":
+		return "image/png"
+	case ".webmanifest":
+		return "application/manifest+json"
+	}
+	return "application/octet-stream"
+}
+
 func handleUI(w http.ResponseWriter, r *http.Request) {
 	page, _ := uiFS.ReadFile("ui.html")
 	cookie := &http.Cookie{Name: "kanban_token", Value: apiTok, Path: "/", HttpOnly: true, SameSite: http.SameSiteLaxMode}
@@ -490,6 +530,21 @@ func serve(listen string) {
 	db = openDB()
 	apiTok = token()
 	mux := http.NewServeMux()
+	// static assets: icon, PWA manifest (paths are also reachable under a proxy prefix)
+	for _, f := range []string{"manifest.webmanifest", "icon.svg", "icon-192.png", "icon-512.png",
+		"icon-maskable.png", "apple-touch-icon.png"} {
+		name := f
+		mux.HandleFunc("GET /"+name, func(w http.ResponseWriter, r *http.Request) {
+			b, err := uiFS.ReadFile("assets/" + name)
+			if err != nil {
+				http.NotFound(w, r)
+				return
+			}
+			w.Header().Set("Content-Type", mimeByExt(name))
+			w.Header().Set("Cache-Control", "public, max-age=86400")
+			w.Write(b)
+		})
+	}
 	mux.Handle("/api/", handleAPI())
 	mux.HandleFunc("/", handleUI)
 	srv := &http.Server{Addr: listen, Handler: stripPrefix(mux), ReadHeaderTimeout: 10 * time.Second}

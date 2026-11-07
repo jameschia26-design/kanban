@@ -67,3 +67,12 @@ go test ./...     # move gate + project linking
 - Token lives beside the database, not in git.
 - Ponytail: no auth beyond the token, no multi-user roles. Add a reverse-proxy auth layer (or
   Tailscale-only binding) if the board ever leaves the tailnet.
+
+## Look and feel
+
+- Brand mark `assets/icon.svg` (three kanban lanes); PNGs are generated from it with headless Chrome.
+  Regenerate: `cd assets && google-chrome --headless --screenshot=icon-512.png --window-size=512,512 src/tile.svg`
+- Installable as a PWA: `manifest.webmanifest`, 192/512 icons, maskable icon, apple-touch icon.
+- Light/dark toggle in the sidebar footer; first visit follows the OS, choice is remembered.
+- Sidebar order = open (non-done) issue count, highest first, empty projects last, ties alphabetical.
+- Pencil on a sidebar row edits the project name and folder; agents cannot edit apps, only humans.
