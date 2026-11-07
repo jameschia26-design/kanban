@@ -1,0 +1,342 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>kanban</title>
+<style>
+  :root{
+    --bg:#0d1117; --panel:#161b22; --card:#1c2430; --line:#2a3543;
+    --text:#e6edf3; --dim:#8b949e; --accent:#4f8cff;
+    --backlog:#6b7684; --plan:#b08900; --fixing:#3b82f6; --review:#a855f7; --done:#2ea043;
+  }
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--text);
+    font:14px/1.5 ui-sans-serif,system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;
+    -webkit-font-smoothing:antialiased;height:100vh;display:flex;overflow:hidden}
+  /* sidebar */
+  aside{width:230px;flex:0 0 230px;border-right:1px solid var(--line);display:flex;flex-direction:column;background:#0a0f16}
+  .brand{padding:16px 16px 12px;font-weight:600;letter-spacing:.4px;font-size:13px;color:var(--dim);text-transform:uppercase}
+  .apps{flex:1;overflow-y:auto;padding:0 8px 12px}
+  .app{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;color:var(--dim);
+    font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+  .app:hover{background:#121a24;color:var(--text)}
+  .app.on{background:#172233;color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
+  .badge{margin-left:auto;font-size:11px;color:#0d1117;background:var(--dim);border-radius:8px;padding:0 6px;min-width:18px;text-align:center}
+  .app.on .badge{background:var(--accent)}
+  .side-foot{padding:10px;border-top:1px solid var(--line);display:flex;gap:6px}
+  /* main */
+  main{flex:1;display:flex;flex-direction:column;min-width:0}
+  header{display:flex;align-items:center;gap:12px;padding:14px 20px;border-bottom:1px solid var(--line)}
+  h1{font-size:15px;margin:0;font-weight:600}
+  .path{font-size:12px;color:var(--dim);font-family:ui-monospace,SFMono-Regular,Menlo,monospace}
+  .spacer{flex:1}
+  button{background:#1f2937;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 11px;
+    font-size:12.5px;cursor:pointer;font-family:inherit}
+  button:hover{border-color:#3d4b5c;background:#243040}
+  button.primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:500}
+  button.primary:hover{background:#6397ff}
+  button.ghost{background:transparent}
+  .board{flex:1;display:flex;gap:12px;padding:16px 20px 20px;overflow-x:auto;align-items:flex-start}
+  .col{flex:1 1 0;min-width:220px;max-width:340px;display:flex;flex-direction:column;max-height:100%}
+  .col-head{display:flex;align-items:center;gap:7px;padding:0 4px 9px;font-size:12px;font-weight:600;
+    letter-spacing:.5px;text-transform:uppercase;color:var(--dim)}
+  .dot{width:7px;height:7px;border-radius:50%}
+  .count{margin-left:auto;font-size:11px;color:var(--dim);font-weight:500}
+  .list{flex:1;overflow-y:auto;display:flex;flex-direction:column;gap:8px;padding:4px;border-radius:9px;
+    min-height:70px;border:1px dashed transparent;transition:background .12s,border-color .12s}
+  .list.over{background:#101a27;border-color:#2b4a73}
+  .card{background:var(--card);border:1px solid var(--line);border-radius:8px;padding:10px 11px;cursor:grab}
+  .card:hover{border-color:#3d4b5c}
+  .card.dragging{opacity:.4}
+  .card h3{margin:0;font-size:13px;font-weight:500;line-height:1.35;word-break:break-word}
+  .card p{margin:6px 0 0;font-size:11.5px;color:var(--dim);max-height:3em;overflow:hidden}
+  .card .meta{margin-top:8px;font-size:11px;color:#5d6b7d;display:flex;gap:8px}
+  .empty{color:#48566a;font-size:12px;text-align:center;padding:18px 0}
+  dialog{background:var(--panel);color:var(--text);border:1px solid var(--line);border-radius:12px;padding:0;
+    width:min(520px,92vw);box-shadow:0 24px 60px rgba(0,0,0,.6)}
+  dialog::backdrop{background:rgba(0,0,0,.6)}
+  .dlg{padding:18px 20px 16px;display:flex;flex-direction:column;gap:10px}
+  .dlg h2{margin:0 0 4px;font-size:15px}
+  label{font-size:11.5px;color:var(--dim);text-transform:uppercase;letter-spacing:.5px}
+  input,textarea,select{width:100%;background:#0d131b;border:1px solid var(--line);color:var(--text);
+    border-radius:7px;padding:8px 10px;font:inherit;font-size:13px;resize:vertical}
+  input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
+  .row{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
+  .err{color:#f85149;font-size:12px;min-height:16px}
+  #fab{display:none;position:fixed;right:18px;bottom:18px;width:52px;height:52px;border-radius:50%;
+    font-size:24px;line-height:1;padding:0;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:20}
+  /* mobile: app bar on top, columns stacked, big tap targets */
+  @media(max-width:760px){
+    body{flex-direction:column;overflow:auto;height:100vh}
+    aside{width:100%;flex:0 0 auto;border-right:none;border-bottom:1px solid var(--line);
+      flex-direction:row;align-items:center;background:#0a0f16}
+    .brand{display:none}
+    .apps{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:10px 8px;flex:1}
+    .app{flex:0 0 auto;background:#121a24;border:1px solid var(--line);border-radius:999px;padding:6px 12px}
+    .app.on{box-shadow:none;border-color:var(--accent)}
+    .badge{display:none}
+    .side-foot{border-top:none;border-left:1px solid var(--line);padding:8px;flex:0 0 auto}
+    main{flex:1;min-height:0}
+    header{padding:12px 14px;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line)}
+    h1{font-size:14px;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+    .path{display:none}
+    header #newIssue{display:none}
+    .board{display:flex;flex-direction:column;gap:16px;padding:14px 14px 90px;overflow-x:visible}
+    .col{flex:0 0 auto;min-width:0;max-width:none;width:100%;max-height:none}
+    .list{overflow:visible;max-height:none}
+    .card{padding:12px 13px}
+    .card h3{font-size:14px}
+    #fab{display:block}
+    dialog{width:96vw;max-height:90vh}
+    .dlg{padding:16px}
+    input,textarea,select{font-size:16px;padding:11px 12px}
+    button{padding:9px 14px;font-size:13px}
+  }
+</style>
+</head>
+<body>
+<aside>
+  <div class="brand">Kanban</div>
+  <div class="apps" id="apps"></div>
+  <div class="side-foot">
+    <button class="ghost" id="addApp" title="Add app">+ app</button>
+    <button class="ghost" id="sync" title="Re-import docker apps">sync</button>
+  </div>
+</aside>
+
+<main>
+  <header>
+    <h1 id="title">Issues</h1>
+    <span class="path" id="path"></span>
+    <div class="spacer"></div>
+    <button class="primary" id="newIssue">New issue</button>
+  </header>
+  <div class="board" id="board"></div>
+  <button class="primary" id="fab" aria-label="New issue">+</button>
+</main>
+
+<dialog id="dlg">
+  <form class="dlg" id="form" method="dialog">
+    <h2 id="dlgTitle">New issue</h2>
+    <div id="appField">
+      <label>App</label>
+      <select id="fApp"></select>
+    </div>
+    <label for="fTitle">Title</label>
+    <input id="fTitle" required autocomplete="off" placeholder="Short summary of the problem">
+    <label for="fDesc">Description</label>
+    <textarea id="fDesc" rows="3" placeholder="What is wrong, repro steps, expected behaviour"></textarea>
+    <label for="fPlan">Plan (fills it and moves to Plan Ready)</label>
+    <textarea id="fPlan" rows="3" placeholder="Scoped approach — optional"></textarea>
+    <div class="err" id="err"></div>
+    <div class="row">
+      <button type="button" class="ghost" id="cancel">Cancel</button>
+      <button type="submit" class="primary" id="submit">Create</button>
+    </div>
+  </form>
+</dialog>
+
+<dialog id="cardDlg">
+  <form class="dlg" id="cardForm" method="dialog">
+    <h2 id="cTitle"></h2>
+    <div class="path" id="cMeta"></div>
+    <label>Description</label>
+    <div id="cDesc" style="font-size:13px;white-space:pre-wrap;color:#c9d1d9"></div>
+    <div id="planBox">
+      <label>Plan</label>
+      <div id="cPlan" style="font-size:13px;white-space:pre-wrap;color:#c9d1d9"></div>
+    </div>
+    <div id="reviewBox">
+      <label>Review notes</label>
+      <div id="cNotes" style="font-size:13px;white-space:pre-wrap;color:#c9d1d9"></div>
+    </div>
+    <div class="row">
+      <button type="button" class="ghost" id="cDelete" style="margin-right:auto;color:#f85149">Delete</button>
+      <button type="button" class="ghost" id="cClose">Close</button>
+      <button type="button" class="primary" id="cDone">Mark done</button>
+    </div>
+  </form>
+</dialog>
+
+<script>
+const TOKEN = "{{TOKEN}}";
+const COLS = [
+  ["backlog","Backlog","var(--backlog)"],
+  ["plan_ready","Plan Ready","var(--plan)"],
+  ["fixing","Fixing","var(--fixing)"],
+  ["review","Review","var(--review)"],
+  ["done","Done","var(--done)"]
+];
+const api = (path, opts={}) => fetch(path, {
+  ...opts,
+  headers: {"X-Kanban-Token": TOKEN, "X-Kanban-Human": "1", "Content-Type":"application/json", ...(opts.headers||{})}
+}).then(r => r.ok ? r.json().catch(()=>null) : r.text().then(t => { throw new Error(t.trim() || r.status) }));
+
+let apps = [], current = null, issues = [];
+
+function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
+
+async function loadApps(){
+  apps = await api("/api/apps");
+  const el = document.getElementById("apps");
+  el.innerHTML = apps.map(a => `<div class="app ${a.id===current?"on":""}" data-id="${esc(a.id)}">
+      <span>${esc(a.name)}</span><b class="badge" data-badge="${esc(a.id)}"></b></div>`).join("")
+    || `<div class="empty">No apps yet</div>`;
+  el.querySelectorAll(".app").forEach(n => n.onclick = () => select(n.dataset.id));
+  if(!current && apps[0]) select(apps[0].id);
+}
+
+async function refreshBadges(){
+  const counts = await api("/api/counts").catch(()=>null);
+  if(!counts) return;
+  document.querySelectorAll("[data-badge]").forEach(b => {
+    const n = counts[b.dataset.badge] || 0;
+    b.textContent = n || "";
+    b.style.display = n ? "" : "none";
+  });
+}
+
+async function select(id){
+  current = id;
+  document.querySelectorAll(".app").forEach(n => n.classList.toggle("on", n.dataset.id===id));
+  const app = apps.find(a => a.id===id);
+  document.getElementById("title").textContent = app ? app.name : "Issues";
+  document.getElementById("path").textContent = app?.repo_path || "";
+  await loadIssues();
+}
+
+async function loadIssues(){
+  if(!current){ document.getElementById("board").innerHTML = ""; return; }
+  issues = await api(`/api/apps/${encodeURIComponent(current)}/issues`);
+  render();
+  refreshBadges();
+}
+
+function render(){
+  const board = document.getElementById("board");
+  board.innerHTML = COLS.map(([key,label,color]) => {
+    const items = issues.filter(i => i.status === key);
+    return `<section class="col">
+      <div class="col-head"><i class="dot" style="background:${color}"></i>${label}
+        <span class="count">${items.length || ""}</span></div>
+      <div class="list" data-status="${key}">
+        ${items.map(cardHTML).join("")}
+      </div></section>`;
+  }).join("");
+  document.querySelectorAll(".card").forEach(n => {
+    n.onclick = () => openCard(Number(n.dataset.id));
+    n.setAttribute("draggable","true");
+    n.ondragstart = e => { e.dataTransfer.setData("text/plain", n.dataset.id); n.classList.add("dragging"); };
+    n.ondragend = () => n.classList.remove("dragging");
+  });
+  document.querySelectorAll(".list").forEach(list => {
+    list.ondragover = e => { e.preventDefault(); list.classList.add("over"); };
+    list.ondragleave = () => list.classList.remove("over");
+    list.ondrop = async e => {
+      e.preventDefault(); list.classList.remove("over");
+      const id = e.dataTransfer.getData("text/plain");
+      const status = list.dataset.status;
+      const issue = issues.find(i => String(i.id) === id);
+      if(!issue || issue.status === status) return;
+      try{
+        await api(`/api/issues/${id}`, {method:"PATCH", body: JSON.stringify({status})});
+        issue.status = status; render();
+      }catch(err){ alert(err.message); }
+    };
+  });
+}
+
+function cardHTML(i){
+  return `<article class="card" data-id="${i.id}">
+    <h3>${esc(i.title)}</h3>
+    ${i.description ? `<p>${esc(i.description)}</p>` : ""}
+    <div class="meta"><span>#${i.id}</span>${i.plan ? "<span>plan</span>" : ""}${i.review_notes ? "<span>notes</span>" : ""}</div>
+  </article>`;
+}
+
+/* new issue */
+const dlg = document.getElementById("dlg");
+document.getElementById("newIssue").onclick = () => {
+  const sel = document.getElementById("fApp");
+  sel.innerHTML = apps.map(a => `<option value="${esc(a.id)}" ${a.id===current?"selected":""}>${esc(a.name)}</option>`).join("");
+  document.getElementById("form").reset();
+  document.getElementById("err").textContent = "";
+  dlg.showModal();
+  if(window.innerWidth > 760) document.getElementById("fTitle").focus();
+};
+document.getElementById("fab").onclick = () => document.getElementById("newIssue").click();
+document.getElementById("addApp").onclick = async () => {
+  const name = prompt("App name");
+  if(!name) return;
+  const repo = prompt("Repo folder (optional)", `~/projects/${name}`) || "";
+  const id = name.toLowerCase().replace(/[^a-z0-9]+/g,"_");
+  await api("/api/apps", {method:"POST", body: JSON.stringify({id, name, source:"manual", repo_path: repo.replace(/^~/,"/home/james")})});
+  current = id;
+  await loadApps(); await select(id);
+};
+document.getElementById("sync").onclick = async () => {
+  await api("/api/sync", {method:"POST"});
+  await loadApps();
+};
+document.getElementById("cancel").onclick = () => dlg.close();
+document.getElementById("form").onsubmit = async e => {
+  e.preventDefault();
+  const appId = document.getElementById("fApp").value;
+  const title = document.getElementById("fTitle").value.trim();
+  const description = document.getElementById("fDesc").value.trim();
+  const plan = document.getElementById("fPlan").value.trim();
+  if(!title) return;
+  try{
+    await api(`/api/apps/${encodeURIComponent(appId)}/issues`, {
+      method:"POST", body: JSON.stringify({title, description, plan, status: plan ? "plan_ready" : "backlog"})
+    });
+    dlg.close();
+    if(appId !== current){ current = appId; }
+    await loadIssues(); await loadApps();
+  }catch(err){ document.getElementById("err").textContent = err.message; }
+};
+
+/* card detail */
+const cardDlg = document.getElementById("cardDlg");
+let openId = null;
+function openCard(id){
+  const i = issues.find(x => x.id === id);
+  if(!i) return;
+  openId = id;
+  document.getElementById("cTitle").textContent = i.title;
+  document.getElementById("cMeta").textContent = `#${i.id} · ${i.status.replace("_"," ")} · ${i.updated_at || ""}`;
+  document.getElementById("cDesc").textContent = i.description || "—";
+  document.getElementById("cPlan").textContent = i.plan || "—";
+  document.getElementById("cNotes").textContent = i.review_notes || "—";
+  document.getElementById("planBox").style.display = i.plan ? "" : "none";
+  document.getElementById("reviewBox").style.display = i.review_notes ? "" : "none";
+  document.getElementById("cDone").style.display = i.status === "done" ? "none" : "";
+  cardDlg.showModal();
+}
+document.getElementById("cClose").onclick = () => cardDlg.close();
+document.getElementById("cDelete").onclick = async () => {
+  if(!confirm("Delete this issue?")) return;
+  try{
+    await api(`/api/issues/${openId}`, {method:"DELETE"});
+    cardDlg.close(); await loadIssues();
+  }catch(err){ alert(err.message); }
+};
+document.getElementById("cDone").onclick = async () => {
+  try{
+    await api(`/api/issues/${openId}`, {method:"PATCH", body: JSON.stringify({status:"done"})});
+    cardDlg.close(); await loadIssues();
+  }catch(err){ alert(err.message); }
+};
+
+/* live updates from the harness */
+function subscribe(){
+  const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+  es.onmessage = () => loadIssues();
+  es.onerror = () => { es.close(); setTimeout(subscribe, 3000); };
+}
+
+loadApps().then(() => { subscribe(); refreshBadges(); });
+</script>
+</body>
+</html>
