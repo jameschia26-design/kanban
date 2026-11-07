@@ -97,21 +97,28 @@
   .err{color:var(--danger);font-size:12px;min-height:16px}
   #fab{display:none;position:fixed;right:18px;bottom:18px;width:52px;height:52px;border-radius:50%;
     font-size:24px;line-height:1;padding:0;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:20}
-  /* mobile: app bar on top, columns stacked, big tap targets */
+  .brand-title{display:flex;align-items:center;gap:8px}
+  .close-side,#menuBtn,#backdrop{display:none}
+  /* mobile: drawer on demand, columns stacked, big tap targets */
   @media(max-width:760px){
     body{flex-direction:column;overflow:auto;height:100vh}
-    aside{width:100%;flex:0 0 auto;border-right:none;border-bottom:1px solid var(--line);
-      flex-direction:row;align-items:center;background:var(--aside)}
-    .brand{display:none}
-    .apps{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:10px 8px;flex:1}
-    .app{flex:0 0 auto;background:var(--hover);border:1px solid var(--line);border-radius:999px;padding:6px 12px}
-    .app .kill{opacity:.65;font-size:16px;padding:0 4px}
-    .app .edit{opacity:.65;font-size:14px;padding:0 4px}
-    .app.on{box-shadow:none;border-color:var(--accent)}
-    .badge{display:none}
-    .side-foot{border-top:none;border-left:1px solid var(--line);padding:8px;flex:0 0 auto}
+    aside{position:fixed;top:0;left:0;bottom:0;width:280px;max-width:85vw;z-index:30;
+      border-right:1px solid var(--line);border-bottom:none;background:var(--aside);
+      transform:translateX(-100%);transition:transform .2s ease;display:flex;flex-direction:column}
+    aside.open{transform:translateX(0);box-shadow:0 0 30px rgba(0,0,0,.5)}
+    #backdrop{position:fixed;inset:0;background:rgba(0,0,0,.45);z-index:29}
+    #backdrop.open{display:block}
+    .brand{display:flex;align-items:center;justify-content:space-between;padding:14px 14px 12px;border-bottom:1px solid var(--line)}
+    .close-side{display:inline-flex;align-items:center;justify-content:center;padding:2px 8px;font-size:16px;border:none;cursor:pointer}
+    #menuBtn{display:inline-flex;align-items:center;justify-content:center;font-size:18px;padding:4px 9px;margin-right:2px}
+    .apps{display:flex;flex-direction:column;gap:3px;overflow-y:auto;overflow-x:hidden;padding:10px 8px;flex:1}
+    .app{flex:0 0 auto;padding:10px 12px;font-size:14px;border-radius:8px}
+    .app .kill{opacity:.7;font-size:16px;padding:0 4px}
+    .app .edit{opacity:.7;font-size:15px;padding:0 4px}
+    .badge{display:inline-block}
+    .side-foot{border-top:1px solid var(--line);border-left:none;padding:10px;display:flex;gap:6px}
     main{flex:1;min-height:0}
-    header{padding:12px 14px;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line)}
+    header{padding:10px 14px;position:sticky;top:0;background:var(--bg);z-index:5;border-bottom:1px solid var(--line)}
     h1{font-size:14px;max-width:46vw;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
     .path{display:none}
     header #newIssue{display:none}
@@ -130,7 +137,10 @@
 </head>
 <body>
 <aside>
-  <div class="brand"><img src="icon.svg" alt="">Kanban</div>
+  <div class="brand">
+    <span class="brand-title"><img src="icon.svg" alt="">Kanban</span>
+    <button class="ghost close-side" id="closeSide" aria-label="Close menu">✕</button>
+  </div>
   <div class="apps" id="apps"></div>
   <div class="side-foot">
     <button class="ghost" id="addApp" title="Add app">+ app</button>
@@ -138,9 +148,11 @@
     <button class="ghost" id="theme" title="Switch light/dark">◐</button>
   </div>
 </aside>
+<div id="backdrop"></div>
 
 <main>
   <header>
+    <button class="ghost" id="menuBtn" aria-label="Menu" title="Projects">☰</button>
     <h1 id="title">Issues</h1>
     <span class="path" id="path"></span>
     <div class="spacer"></div>
@@ -292,6 +304,7 @@ async function refreshBadges(){
 }
 
 async function select(id){
+  closeNav();
   current = id;
   document.querySelectorAll(".app").forEach(n => n.classList.toggle("on", n.dataset.id===id));
   const app = apps.find(a => a.id===id);
@@ -361,6 +374,7 @@ document.getElementById("newIssue").onclick = () => {
 };
 document.getElementById("fab").onclick = () => document.getElementById("newIssue").click();
 document.getElementById("addApp").onclick = async () => {
+  closeNav();
   const name = prompt("App name");
   if(!name) return;
   const repo = prompt("Repo folder (optional)", `~/projects/${name}`) || "";
@@ -373,6 +387,7 @@ document.getElementById("addApp").onclick = async () => {
 const appDlg = document.getElementById("appDlg");
 let editId = null;
 function openAppDialog(id){
+  closeNav();
   const a = apps.find(x => x.id === id);
   if(!a) return;
   editId = id;
@@ -463,6 +478,16 @@ document.getElementById("cDone").onclick = async () => {
     cardDlg.close(); await loadIssues();
   }catch(err){ alert(err.message); }
 };
+
+/* mobile drawer */
+const asideEl = document.querySelector("aside");
+const backdropEl = document.getElementById("backdrop");
+function closeNav(){ asideEl.classList.remove("open"); backdropEl.classList.remove("open"); }
+function openNav(){ asideEl.classList.add("open"); backdropEl.classList.add("open"); }
+document.getElementById("menuBtn").onclick = openNav;
+document.getElementById("closeSide").onclick = closeNav;
+backdropEl.onclick = closeNav;
+window.addEventListener("keydown", e => { if(e.key === "Escape") closeNav(); });
 
 /* live updates from the harness */
 function subscribe(){
