@@ -455,13 +455,27 @@ func handleUI(w http.ResponseWriter, r *http.Request) {
 	io.WriteString(w, strings.Replace(string(page), "{{TOKEN}}", apiTok, 1))
 }
 
+// stripPrefix lets the board live under a reverse-proxy path (e.g. Tailscale serve /kanban)
+// whether or not the proxy strips the prefix itself.
+func stripPrefix(h http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/kanban/") || r.URL.Path == "/kanban" {
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/kanban")
+			if r.URL.Path == "" {
+				r.URL.Path = "/"
+			}
+		}
+		h.ServeHTTP(w, r)
+	})
+}
+
 func serve(listen string) {
 	db = openDB()
 	apiTok = token()
 	mux := http.NewServeMux()
 	mux.Handle("/api/", handleAPI())
 	mux.HandleFunc("/", handleUI)
-	srv := &http.Server{Addr: listen, Handler: mux, ReadHeaderTimeout: 10 * time.Second}
+	srv := &http.Server{Addr: listen, Handler: stripPrefix(mux), ReadHeaderTimeout: 10 * time.Second}
 	fmt.Printf("kanban board on http://%s  (db %s)\n", listen, mustDB())
 	if err := srv.ListenAndServe(); err != nil {
 		fmt.Fprintln(os.Stderr, err)

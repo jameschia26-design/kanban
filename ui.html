@@ -161,6 +161,8 @@
 
 <script>
 const TOKEN = "{{TOKEN}}";
+// Works both at / and under a path prefix (e.g. Tailscale serve /kanban).
+const PREFIX = location.pathname.replace(/[^/]*$/, "");
 const COLS = [
   ["backlog","Backlog","var(--backlog)"],
   ["plan_ready","Plan Ready","var(--plan)"],
@@ -168,7 +170,7 @@ const COLS = [
   ["review","Review","var(--review)"],
   ["done","Done","var(--done)"]
 ];
-const api = (path, opts={}) => fetch(path, {
+const api = (path, opts={}) => fetch(PREFIX + path.replace(/^\//, ""), {
   ...opts,
   headers: {"X-Kanban-Token": TOKEN, "X-Kanban-Human": "1", "Content-Type":"application/json", ...(opts.headers||{})}
 }).then(r => r.ok ? r.json().catch(()=>null) : r.text().then(t => { throw new Error(t.trim() || r.status) }));
@@ -331,7 +333,7 @@ document.getElementById("cDone").onclick = async () => {
 
 /* live updates from the harness */
 function subscribe(){
-  const es = new EventSource(`/api/events?token=${encodeURIComponent(TOKEN)}`);
+  const es = new EventSource(`${PREFIX}api/events?token=${encodeURIComponent(TOKEN)}`);
   es.onmessage = () => loadIssues();
   es.onerror = () => { es.close(); setTimeout(subscribe, 3000); };
 }
