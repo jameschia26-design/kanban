@@ -336,6 +336,23 @@ func handleAPI() http.Handler {
 		notify()
 		jsonOut(w, map[string]bool{"deleted": true})
 	})
+	mux.HandleFunc("DELETE /api/apps/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Kanban-Human") != "1" {
+			http.Error(w, "harness may not delete apps", http.StatusForbidden)
+			return
+		}
+		id := r.PathValue("id")
+		if _, err := db.Exec(`DELETE FROM issues WHERE app_id=?`, id); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		if _, err := db.Exec(`DELETE FROM apps WHERE id=?`, id); err != nil {
+			http.Error(w, err.Error(), 400)
+			return
+		}
+		notify()
+		jsonOut(w, map[string]bool{"deleted": true})
+	})
 	mux.HandleFunc("GET /api/events", func(w http.ResponseWriter, r *http.Request) {
 		f, ok := w.(http.Flusher)
 		if !ok {
@@ -491,6 +508,20 @@ func cli(args []string) {
 		return
 	}
 	switch args[0] {
+	case "triage":
+		// Everything a planning pass needs: apps that have unscoped backlog items.
+		var out []map[string]any
+		for _, a := range query(`SELECT id,name,COALESCE(repo_path,'') repo_path FROM apps ORDER BY name`) {
+			issues := query(`SELECT id,title,description,status FROM issues
+				WHERE app_id=? AND status='backlog' ORDER BY id`, a["id"])
+			if len(issues) == 0 {
+				continue
+			}
+			a["issues"] = issues
+			out = append(out, a)
+		}
+		b, _ := json.MarshalIndent(out, "", "  ")
+		fmt.Println(string(b))
 	case "app":
 		switch args[1] {
 		case "add":
@@ -519,6 +550,23 @@ func cli(args []string) {
 			for _, a := range query(`SELECT id,name,source FROM apps ORDER BY name`) {
 				fmt.Printf("%-24s %-8s %v\n", a["id"], a["source"], a["name"])
 			}
+		case "rm":
+			if len(args) < 3 {
+				fmt.Fprintln(os.Stderr, "usage: kanban app rm <app_id>")
+				return
+			}
+			id := args[2]
+			db.Exec(`DELETE FROM issues WHERE app_id=?`, id)
+			res, err := db.Exec(`DELETE FROM apps WHERE id=?`, id)
+			if err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				return
+			}
+			if n, _ := res.RowsAffected(); n == 0 {
+				fmt.Fprintf(os.Stderr, "no such app: %s\n", id)
+				return
+			}
+			fmt.Printf("removed %s\n", id)
 		}
 	case "issue":
 		sub := args[1]
@@ -526,14 +574,17 @@ func cli(args []string) {
 		case "add":
 			appID, title := args[2], args[3]
 			var plan, desc string
-			for i, a := range args[4:] {
+			for i := 4; i < len(args); i++ {
+				a := args[i]
 				switch {
-				case a == "--plan" && i+5 < len(args):
-					plan = args[i+5]
+				case a == "--plan" && i+1 < len(args):
+					plan = args[i+1]
+					i++
 				case strings.HasPrefix(a, "--plan="):
 					plan = strings.TrimPrefix(a, "--plan=")
-				case a == "--desc" && i+5 < len(args):
-					desc = args[i+5]
+				case a == "--desc" && i+1 < len(args):
+					desc = args[i+1]
+					i++
 				case strings.HasPrefix(a, "--desc="):
 					desc = strings.TrimPrefix(a, "--desc=")
 				case !strings.HasPrefix(a, "-") && plan == "":
@@ -598,6 +649,18 @@ func cli(args []string) {
 				os.Exit(1)
 			}
 			fmt.Println("ok")
+		case "plan":
+			id := args[2]
+			plan := strings.Join(args[3:], " ")
+			if plan == "" {
+				fmt.Fprintln(os.Stderr, "usage: kanban issue plan <id> \"<plan text>\"")
+				return
+			}
+			if _, err := patchIssue(id, Issue{Plan: plan, Status: "plan_ready"}, false); err != nil {
+				fmt.Fprintf(os.Stderr, "error: %v\n", err)
+				os.Exit(1)
+			}
+			fmt.Println("ok")
 		case "review":
 			id := args[2]
 			notes := ""
@@ -625,12 +688,15 @@ func usage() {
 
   kanban serve [--listen 0.0.0.0:3456]
   kanban app add <name> [repo_path]
+  kanban app rm <app_id>
   kanban app sync-projects [root]    # link every git repo under ~/projects
   kanban app sync-docker [id_prefix]
   kanban app list
+  kanban triage                    # JSON: every app with backlog items
   kanban issue add <app> <title> [--plan "..."] [--desc "..."]
   kanban issue list <app> [--status <status>]
   kanban issue next <app>          # plan_ready -> fixing
+  kanban issue plan <id> "<plan text>"    # write plan, move to plan_ready
   kanban issue review <id> --notes "..."  # -> review
   kanban issue move <id> <status> [--human]
 `)

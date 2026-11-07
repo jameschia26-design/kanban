@@ -19,7 +19,12 @@
   .brand{padding:16px 16px 12px;font-weight:600;letter-spacing:.4px;font-size:13px;color:var(--dim);text-transform:uppercase}
   .apps{flex:1;overflow-y:auto;padding:0 8px 12px}
   .app{display:flex;align-items:center;gap:8px;padding:7px 10px;border-radius:7px;cursor:pointer;color:var(--dim);
-    font-size:13px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+    font-size:13px;white-space:nowrap;overflow:hidden}
+  .app span{overflow:hidden;text-overflow:ellipsis}
+  .app .kill{margin-left:2px;border:0;background:transparent;color:#5d6b7d;padding:0 3px;font-size:14px;
+    line-height:1;border-radius:4px;cursor:pointer;opacity:0}
+  .app:hover .kill{opacity:1}
+  .app .kill:hover{color:#f85149;background:#2a1a1c}
   .app:hover{background:#121a24;color:var(--text)}
   .app.on{background:#172233;color:var(--text);box-shadow:inset 2px 0 0 var(--accent)}
   .badge{margin-left:auto;font-size:11px;color:#0d1117;background:var(--dim);border-radius:8px;padding:0 6px;min-width:18px;text-align:center}
@@ -38,8 +43,9 @@
   button.primary:hover{background:#6397ff}
   button.ghost{background:transparent}
   .board{flex:1;display:flex;gap:12px;padding:16px 20px 20px;overflow-x:auto;align-items:flex-start}
-  .col{flex:1 1 0;min-width:220px;max-width:340px;display:flex;flex-direction:column;max-height:100%}
-  .col-head{display:flex;align-items:center;gap:7px;padding:0 4px 9px;font-size:12px;font-weight:600;
+  .col{flex:1 1 0;min-width:230px;max-width:340px;display:flex;flex-direction:column;max-height:100%;
+    background:#0f151d;border:1px solid var(--line);border-radius:11px;padding:10px 10px 8px}
+  .col-head{display:flex;align-items:center;gap:7px;padding:2px 4px 10px;font-size:12px;font-weight:600;
     letter-spacing:.5px;text-transform:uppercase;color:var(--dim)}
   .dot{width:7px;height:7px;border-radius:50%}
   .count{margin-left:auto;font-size:11px;color:var(--dim);font-weight:500}
@@ -74,6 +80,7 @@
     .brand{display:none}
     .apps{display:flex;gap:6px;overflow-x:auto;overflow-y:hidden;padding:10px 8px;flex:1}
     .app{flex:0 0 auto;background:#121a24;border:1px solid var(--line);border-radius:999px;padding:6px 12px}
+    .app .kill{opacity:.65;font-size:16px;padding:0 4px}
     .app.on{box-shadow:none;border-color:var(--accent)}
     .badge{display:none}
     .side-foot{border-top:none;border-left:1px solid var(--line);padding:8px;flex:0 0 auto}
@@ -183,9 +190,26 @@ async function loadApps(){
   apps = await api("/api/apps");
   const el = document.getElementById("apps");
   el.innerHTML = apps.map(a => `<div class="app ${a.id===current?"on":""}" data-id="${esc(a.id)}">
-      <span>${esc(a.name)}</span><b class="badge" data-badge="${esc(a.id)}"></b></div>`).join("")
+      <span>${esc(a.name)}</span><b class="badge" data-badge="${esc(a.id)}"></b>
+      <button class="kill" data-kill="${esc(a.id)}" title="Remove app">×</button></div>`).join("")
     || `<div class="empty">No apps yet</div>`;
-  el.querySelectorAll(".app").forEach(n => n.onclick = () => select(n.dataset.id));
+  el.querySelectorAll(".app").forEach(n => n.onclick = e => {
+    if(e.target.dataset.kill) return;
+    select(n.dataset.id);
+  });
+  el.querySelectorAll("[data-kill]").forEach(b => b.onclick = async e => {
+    e.stopPropagation();
+    const id = b.dataset.kill;
+    const app = apps.find(a => a.id === id);
+    if(!confirm(`Remove ${app?.name || id} from the board?\n\nIts issues are deleted too. The folder and deployment are not touched.`)) return;
+    try{
+      await api(`/api/apps/${encodeURIComponent(id)}`, {method:"DELETE"});
+      if(current === id) current = null;
+      await loadApps();
+      if(!current && apps.length) await select(apps[0].id);
+      else if(!apps.length){ issues = []; render(); document.getElementById("title").textContent = "Issues"; document.getElementById("path").textContent = ""; }
+    }catch(err){ alert(err.message); }
+  });
   if(!current && apps[0]) select(apps[0].id);
 }
 
