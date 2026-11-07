@@ -338,10 +338,22 @@ func handleAPI() http.Handler {
 		jsonOut(w, updated)
 	})
 	mux.HandleFunc("GET /api/counts", func(w http.ResponseWriter, r *http.Request) {
-		counts := map[string]int64{}
-		for _, row := range query(`SELECT app_id, COUNT(*) n FROM issues
-			WHERE status <> 'done' GROUP BY app_id`) {
-			counts[fmt.Sprint(row["app_id"])] = scanInt(row["n"])
+		// per-app counts by lane, plus the open total the sidebar badge shows
+		counts := map[string]map[string]int64{}
+		for _, row := range query(`SELECT app_id, status, COUNT(*) n FROM issues
+			GROUP BY app_id, status`) {
+			id, st := fmt.Sprint(row["app_id"]), fmt.Sprint(row["status"])
+			if counts[id] == nil {
+				counts[id] = map[string]int64{}
+			}
+			counts[id][st] = scanInt(row["n"])
+		}
+		for _, c := range counts {
+			open := int64(0)
+			for _, st := range []string{"backlog", "plan_ready", "fixing", "review"} {
+				open += c[st]
+			}
+			c["open"] = open
 		}
 		jsonOut(w, counts)
 	})

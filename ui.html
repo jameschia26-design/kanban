@@ -226,9 +226,18 @@ const api = (path, opts={}) => fetch(PREFIX + path.replace(/^\//, ""), {
 
 let apps = [], current = null, issues = [], counts = {};
 
-// most open work first; projects with nothing open sink to the bottom
+// pipeline order: backlog first, then plan ready, fixing, review; empties at the bottom
+const LANES = ["backlog", "plan_ready", "fixing", "review"];
+const laneCount = (id, lane) => (counts[id] || {})[lane] || 0;
+const openCount = id => (counts[id] || {}).open || 0;
 function orderApps(){
-  apps.sort((a, b) => (counts[b.id] || 0) - (counts[a.id] || 0) || a.name.localeCompare(b.name));
+  apps.sort((a, b) => {
+    for(const lane of LANES){
+      const d = laneCount(b.id, lane) - laneCount(a.id, lane);
+      if(d) return d;
+    }
+    return a.name.localeCompare(b.name);
+  });
 }
 
 function esc(s){ return String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c])); }
@@ -271,17 +280,16 @@ async function loadApps(){
 async function refreshBadges(){
   counts = await api("/api/counts").catch(()=>null) || {};
   document.querySelectorAll("[data-badge]").forEach(b => {
-    const n = counts[b.dataset.badge] || 0;
+    const n = openCount(b.dataset.badge);
     b.textContent = n || "";
     b.style.display = n ? "" : "none";
   });
   // the peer order can change when work opens or closes
-  const el = document.getElementById("apps"), before = appOrder(el);
   orderApps();
-  if(appOrder(el) !== before) el.querySelectorAll(".app").forEach(n => el.appendChild(n));
+  const el = document.getElementById("apps");
+  const node = new Map([...el.querySelectorAll(".app")].map(n => [n.dataset.id, n]));
+  for(const a of apps){ const n = node.get(a.id); if(n) el.appendChild(n); }
 }
-
-function appOrder(el){ return [...el.querySelectorAll(".app")].map(n => n.dataset.id).join(); }
 
 async function select(id){
   current = id;
