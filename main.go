@@ -128,7 +128,34 @@ func query(q string, args ...any) []map[string]any {
 }
 
 // ---- docker discovery ----
+// composeRoots maps compose project name -> host folder holding its compose file.
+func composeRoots() map[string]string {
+	out := map[string]string{}
+	cmd := exec.Command("docker", "compose", "ls", "--format", "json")
+	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH")+":/usr/bin:/bin")
+	b, err := cmd.Output()
+	if err != nil {
+		return out
+	}
+	var rows []struct {
+		Name        string   `json:"Name"`
+		ConfigFiles string   `json:"ConfigFiles"`
+	}
+	if json.Unmarshal(b, &rows) != nil {
+		return out
+	}
+	for _, r := range rows {
+		if r.ConfigFiles == "" {
+			continue
+		}
+		files := strings.Split(r.ConfigFiles, ",")
+		out[r.Name] = filepath.Dir(strings.TrimSpace(files[0]))
+	}
+	return out
+}
+
 func syncDocker(prefix string) []string {
+	roots := composeRoots()
 	cmd := exec.Command("docker", "ps", "--format", `{{.Label "com.docker.compose.project"}}`+"\t"+`{{.Names}}`)
 	cmd.Env = append(os.Environ(), "PATH="+os.Getenv("PATH")+":/usr/bin:/bin")
 	out, err := cmd.Output()
@@ -151,9 +178,14 @@ func syncDocker(prefix string) []string {
 			continue
 		}
 		seen[id] = true
-		res, err := db.Exec(`INSERT OR IGNORE INTO apps (id,name,source) VALUES (?,?,'docker')`,
-			prefix+id, name)
-		if n, _ := res.RowsAffected(); err == nil && n > 0 {
+		res, err := db.Exec(`INSERT INTO apps (id,name,source,repo_path) VALUES (?,?,'docker',?)
+			ON CONFLICT(id) DO UPDATE SET name=excluded.name,
+			repo_path=CASE WHEN excluded.repo_path<>'' THEN excluded.repo_path ELSE apps.repo_path END`,
+			prefix+id, name, roots[name])
+		if err != nil {
+			continue
+		}
+		if n, _ := res.RowsAffected(); n > 0 {
 			added = append(added, name)
 		}
 	}
