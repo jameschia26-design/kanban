@@ -63,6 +63,7 @@ go test ./...     # move gate + project linking
 ## Notes
 
 - Column moves by drag-drop in the UI; agents cannot reorder into `done`.
+- `triage.sh` writes plans for backlog items on demand. No schedule is installed; run it by hand.
 - Token lives beside the database, not in git.
 - Ponytail: no auth beyond the token, no multi-user roles. Add a reverse-proxy auth layer (or
   Tailscale-only binding) if the board ever leaves the tailnet.
