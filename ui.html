@@ -275,6 +275,7 @@ const api = (path, opts={}) => fetch(PREFIX + path.replace(/^\//, ""), {
   headers: {"X-Kanban-Token": TOKEN, "X-Kanban-Human": "1", "Content-Type":"application/json", ...(opts.headers||{})}
 }).then(r => r.ok ? r.json().catch(()=>null) : r.text().then(t => { throw new Error(t.trim() || r.status) }));
 
+const ALL = "__all__";
 let apps = [], current = null, issues = [], counts = {};
 
 // pipeline order: backlog first, then plan ready, fixing, review, done; empties at the bottom
@@ -299,7 +300,7 @@ async function loadApps(){
   apps = list;
   orderApps();
   const el = document.getElementById("apps");
-  el.innerHTML = apps.map(a => `<div class="app ${a.id===current?"on":""}" data-id="${esc(a.id)}">
+  el.innerHTML = `<div class="app pin ${current===ALL?"on":""}" data-id="${ALL}"><span>All boards</span></div>` + apps.map(a => `<div class="app ${a.id===current?"on":""}" data-id="${esc(a.id)}">
       <span>${esc(a.name)}</span><b class="badge" data-badge="${esc(a.id)}"></b>
       <button class="edit" data-edit="${esc(a.id)}" title="Edit project">✎</button>
       <button class="kill" data-kill="${esc(a.id)}" title="Remove app">×</button></div>`).join("")
@@ -328,6 +329,8 @@ async function loadApps(){
   if(!current && apps[0]) select(apps[0].id);
 }
 
+const appName = id => (apps.find(a => a.id === id) || {}).name || id;
+
 async function refreshBadges(){
   counts = await api("/api/counts").catch(()=>null) || {};
   document.querySelectorAll("[data-badge]").forEach(b => {
@@ -347,14 +350,19 @@ async function select(id){
   current = id;
   document.querySelectorAll(".app").forEach(n => n.classList.toggle("on", n.dataset.id===id));
   const app = apps.find(a => a.id===id);
-  document.getElementById("title").textContent = app ? app.name : "Issues";
-  document.getElementById("path").textContent = app?.repo_path || "";
+  document.getElementById("title").textContent = id === ALL ? "All boards" : app ? app.name : "Issues";
+  document.getElementById("path").textContent = id === ALL ? "Read-only · open a card to edit it in its board" : app?.repo_path || "";
   await loadIssues();
 }
 
 async function loadIssues(){
   if(!current){ document.getElementById("board").innerHTML = ""; return; }
-  issues = await api(`/api/apps/${encodeURIComponent(current)}/issues`);
+  if(current === ALL){
+    const lists = await Promise.all(apps.map(a => api(`/api/apps/${encodeURIComponent(a.id)}/issues`).then(list => list.map(i => ({...i, app_id: a.id})))));
+    issues = lists.flat();
+  } else {
+    issues = (await api(`/api/apps/${encodeURIComponent(current)}/issues`)).map(i => ({...i, app_id: current}));
+  }
   render();
   refreshBadges();
 }
@@ -370,12 +378,15 @@ function render(){
         ${items.map(cardHTML).join("")}
       </div></section>`;
   }).join("");
+  const combined = current === ALL;
   document.querySelectorAll(".card").forEach(n => {
-    n.onclick = () => openCard(Number(n.dataset.id));
+    n.onclick = () => combined ? openFromAll(issues.find(i => String(i.id) === n.dataset.id)) : openCard(Number(n.dataset.id));
+    if(combined) { n.setAttribute("draggable","false"); return; }
     n.setAttribute("draggable","true");
     n.ondragstart = e => { e.dataTransfer.setData("text/plain", n.dataset.id); n.classList.add("dragging"); };
     n.ondragend = () => n.classList.remove("dragging");
   });
+  if(combined) return;
   document.querySelectorAll(".list").forEach(list => {
     list.ondragover = e => { e.preventDefault(); list.classList.add("over"); };
     list.ondragleave = () => list.classList.remove("over");
@@ -395,10 +406,18 @@ function render(){
 
 function cardHTML(i){
   return `<article class="card" data-id="${i.id}">
+    ${current === ALL ? `<span class="meta">${esc(appName(i.app_id))}</span>` : ""}
     <h3>${esc(i.title)}</h3>
     ${i.description ? `<p>${esc(i.description)}</p>` : ""}
     <div class="meta"><span>#${i.id}</span>${i.plan ? "<span>plan</span>" : ""}${i.review_notes ? "<span>notes</span>" : ""}</div>
   </article>`;
+}
+
+// Combined view: open the card's own board so every edit happens there.
+async function openFromAll(issue){
+  if(!issue) return;
+  await select(issue.app_id);
+  openCard(issue.id);
 }
 
 /* new issue */
@@ -406,6 +425,7 @@ const dlg = document.getElementById("dlg");
 document.getElementById("newIssue").onclick = () => {
   const sel = document.getElementById("fApp");
   sel.innerHTML = apps.map(a => `<option value="${esc(a.id)}" ${a.id===current?"selected":""}>${esc(a.name)}</option>`).join("");
+  if(current === ALL) sel.value = apps[0]?.id || "";
   document.getElementById("form").reset();
   clearPendingPhotos();
   document.getElementById("err").textContent = "";
