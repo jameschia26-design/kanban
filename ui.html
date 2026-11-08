@@ -95,6 +95,14 @@
   input:focus,textarea:focus,select:focus{outline:none;border-color:var(--accent)}
   .row{display:flex;gap:8px;justify-content:flex-end;margin-top:6px}
   .err{color:var(--danger);font-size:12px;min-height:16px}
+  .attachments-list{display:flex;flex-wrap:wrap;gap:8px;margin-top:4px;min-height:20px}
+  .att-item{position:relative;border:1px solid var(--line);border-radius:6px;overflow:hidden;background:var(--card)}
+  .att-item img{display:block;width:80px;height:60px;object-fit:cover;cursor:pointer}
+  .att-item:hover{border-color:var(--line2)}
+  .att-item .att-del{position:absolute;top:2px;right:2px;background:rgba(0,0,0,.65);color:#fff;border:none;border-radius:3px;padding:0 4px;font-size:11px;cursor:pointer;line-height:14px}
+  .att-item .att-del:hover{background:var(--danger)}
+  .attach-actions{display:flex;align-items:center;gap:8px;margin-top:6px}
+  .attach-hint{font-size:11.5px;color:var(--faint)}
   #fab{display:none;position:fixed;right:18px;bottom:18px;width:52px;height:52px;border-radius:50%;
     font-size:24px;line-height:1;padding:0;box-shadow:0 8px 24px rgba(0,0,0,.5);z-index:20}
   .brand-title{display:flex;align-items:center;gap:8px}
@@ -189,7 +197,7 @@
     <label for="aName">Name</label>
     <input id="aName" required autocomplete="off">
     <label for="aPath">Folder</label>
-    <input id="aPath" autocomplete="off" spellcheck="false" placeholder="/home/james/projects/app">
+    <input id="aPath" autocomplete="off" spellcheck="false" placeholder="~/projects/app">
     <div class="err" id="aErr"></div>
     <div class="row">
       <button type="button" class="ghost" id="aCancel">Cancel</button>
@@ -204,6 +212,16 @@
     <div class="path" id="cMeta"></div>
     <label>Description</label>
     <div id="cDesc" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
+    <div id="attachBox">
+      <label>Attachments</label>
+      <div id="cAttachments" class="attachments-list"></div>
+      <div class="attach-actions">
+        <button type="button" class="ghost" id="btnAttach" style="padding:4px 9px;font-size:12px">+ Add photo</button>
+        <input type="file" id="attachFile" accept="image/*" style="display:none">
+        <span class="attach-hint">or paste / drag image</span>
+        <span id="attachStatus" style="font-size:11.5px;color:var(--accent);margin-left:auto"></span>
+      </div>
+    </div>
     <div id="planBox">
       <label>Plan</label>
       <div id="cPlan" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
@@ -379,7 +397,7 @@ document.getElementById("addApp").onclick = async () => {
   if(!name) return;
   const repo = prompt("Repo folder (optional)", `~/projects/${name}`) || "";
   const id = name.toLowerCase().replace(/[^a-z0-9]+/g,"_");
-  await api("/api/apps", {method:"POST", body: JSON.stringify({id, name, source:"manual", repo_path: repo.replace(/^~/,"/home/james")})});
+  await api("/api/apps", {method:"POST", body: JSON.stringify({id, name, source:"manual", repo_path: repo.trim()})});
   current = id;
   await loadApps(); await select(id);
 };
@@ -401,7 +419,7 @@ document.getElementById("aCancel").onclick = () => appDlg.close();
 document.getElementById("appForm").onsubmit = async e => {
   e.preventDefault();
   const name = document.getElementById("aName").value.trim();
-  const repo_path = document.getElementById("aPath").value.trim().replace(/^~/, "/home/james");
+  const repo_path = document.getElementById("aPath").value.trim();
   if(!name){ document.getElementById("aErr").textContent = "Name is required"; return; }
   try{
     await api(`/api/apps/${encodeURIComponent(editId)}`, {method:"PATCH", body: JSON.stringify({name, repo_path})});
@@ -450,6 +468,131 @@ document.getElementById("form").onsubmit = async e => {
 /* card detail */
 const cardDlg = document.getElementById("cardDlg");
 let openId = null;
+
+async function resizeImageIfNeeded(file){
+  if(!file.type || !file.type.startsWith("image/")) return file;
+  if(file.type === "image/svg+xml" || file.type === "image/gif") return file;
+  return new Promise(resolve => {
+    const img = new Image();
+    const url = URL.createObjectURL(file);
+    img.onload = () => {
+      URL.revokeObjectURL(url);
+      const MAX_DIM = 1920;
+      let { width, height } = img;
+      if(file.size > 2 * 1024 * 1024 || width > MAX_DIM || height > MAX_DIM){
+        if(width > height && width > MAX_DIM){
+          height = Math.round((height * MAX_DIM) / width);
+          width = MAX_DIM;
+        }else if(height > MAX_DIM){
+          width = Math.round((width * MAX_DIM) / height);
+          height = MAX_DIM;
+        }
+        const canvas = document.createElement("canvas");
+        canvas.width = width; canvas.height = height;
+        const ctx = canvas.getContext("2d");
+        ctx.drawImage(img, 0, 0, width, height);
+        canvas.toBlob(blob => {
+          if(!blob){ resolve(file); return; }
+          const name = (file.name || "image").replace(/\.[^.]+$/, "") + ".jpg";
+          resolve(new File([blob], name, {type: "image/jpeg"}));
+        }, "image/jpeg", 0.85);
+      }else{
+        resolve(file);
+      }
+    };
+    img.onerror = () => resolve(file);
+    img.src = url;
+  });
+}
+
+let uploading = false;
+async function uploadAttachment(file){
+  if(!openId || uploading) return;
+  const statusEl = document.getElementById("attachStatus");
+  try{
+    uploading = true;
+    statusEl.textContent = "Uploading...";
+    const processed = await resizeImageIfNeeded(file);
+    const fd = new FormData();
+    fd.append("file", processed, processed.name || "photo.jpg");
+    const res = await fetch(`${PREFIX}api/issues/${openId}/attachments`, {
+      method: "POST",
+      headers: {"X-Kanban-Token": TOKEN, "X-Kanban-Human": "1"},
+      body: fd
+    });
+    if(!res.ok){
+      const err = await res.text();
+      throw new Error(err || res.status);
+    }
+    statusEl.textContent = "";
+    await loadAttachments(openId);
+  }catch(err){
+    statusEl.textContent = "Upload failed: " + err.message;
+  }finally{
+    uploading = false;
+  }
+}
+
+async function loadAttachments(issueId){
+  const box = document.getElementById("cAttachments");
+  if(!box) return;
+  box.innerHTML = `<span style="font-size:12px;color:var(--faint)">Loading...</span>`;
+  try{
+    const list = await api(`/api/issues/${issueId}/attachments`);
+    if(!list || !list.length){
+      box.innerHTML = `<span style="font-size:12px;color:var(--faint)">No attachments yet</span>`;
+      return;
+    }
+    box.innerHTML = list.map(a => {
+      const url = `${PREFIX}api/attachments/${a.id}?token=${encodeURIComponent(TOKEN)}`;
+      const kb = Math.round((a.size || 0) / 1024);
+      return `<div class="att-item">
+        <a href="${url}" target="_blank" title="${esc(a.filename)} (${kb} KB)">
+          <img src="${url}" alt="${esc(a.filename)}" loading="lazy">
+        </a>
+        <button type="button" class="att-del" data-del="${a.id}" title="Delete attachment">✕</button>
+      </div>`;
+    }).join("");
+    box.querySelectorAll("[data-del]").forEach(b => {
+      b.onclick = async e => {
+        e.preventDefault(); e.stopPropagation();
+        if(!confirm("Delete this attachment?")) return;
+        try{
+          await api(`/api/attachments/${b.dataset.del}`, {method: "DELETE"});
+          await loadAttachments(issueId);
+        }catch(err){ alert(err.message); }
+      };
+    });
+  }catch(err){
+    box.innerHTML = `<span style="font-size:12px;color:var(--danger)">Failed to load: ${esc(err.message)}</span>`;
+  }
+}
+
+document.getElementById("btnAttach").onclick = () => document.getElementById("attachFile").click();
+document.getElementById("attachFile").onchange = e => {
+  const f = e.target.files?.[0];
+  if(f) uploadAttachment(f);
+  e.target.value = "";
+};
+cardDlg.addEventListener("paste", e => {
+  if(!openId) return;
+  const items = e.clipboardData?.items;
+  if(!items) return;
+  for(const item of items){
+    if(item.type && item.type.indexOf("image") !== -1){
+      const f = item.getAsFile();
+      if(f){ uploadAttachment(f); e.preventDefault(); break; }
+    }
+  }
+});
+cardDlg.addEventListener("dragover", e => e.preventDefault());
+cardDlg.addEventListener("drop", e => {
+  if(!openId) return;
+  e.preventDefault();
+  const f = e.dataTransfer?.files?.[0];
+  if(f && f.type && f.type.startsWith("image/")){ uploadAttachment(f); }
+});
+
 function openCard(id){
   const i = issues.find(x => x.id === id);
   if(!i) return;
@@ -462,6 +605,8 @@ function openCard(id){
   document.getElementById("planBox").style.display = i.plan ? "" : "none";
   document.getElementById("reviewBox").style.display = i.review_notes ? "" : "none";
   document.getElementById("cDone").style.display = i.status === "done" ? "none" : "";
+  document.getElementById("attachStatus").textContent = "";
+  loadAttachments(openId);
   cardDlg.showModal();
 }
 document.getElementById("cClose").onclick = () => cardDlg.close();

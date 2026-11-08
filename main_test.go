@@ -64,6 +64,16 @@ func TestSyncProjectsLinksRealFolders(t *testing.T) {
 	}
 }
 
+func TestExpandHome(t *testing.T) {
+	h, _ := os.UserHomeDir()
+	if got := expandHome("~/my/proj"); got != filepath.Join(h, "my/proj") {
+		t.Fatalf("expandHome(~/my/proj) = %q, want %q", got, filepath.Join(h, "my/proj"))
+	}
+	if got := expandHome("/var/tmp"); got != "/var/tmp" {
+		t.Fatalf("expandHome(/var/tmp) = %q, want /var/tmp", got)
+	}
+}
+
 func itoa(n int64) string {
 	if n == 0 {
 		return "0"

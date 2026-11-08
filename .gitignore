@@ -2,3 +2,6 @@ kanban
 *.db
 *.db-shm
 *.db-wal
+token*
+attachments/
+.DS_Store

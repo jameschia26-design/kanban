@@ -37,6 +37,25 @@ func dataDir() string {
 	return filepath.Join(h, ".local/share/kanban")
 }
 
+func attachDir() string {
+	d := filepath.Join(dataDir(), "attachments")
+	os.MkdirAll(d, 0o755)
+	return d
+}
+
+func expandHome(p string) string {
+	p = strings.TrimSpace(p)
+	if p == "~" {
+		h, _ := os.UserHomeDir()
+		return h
+	}
+	if strings.HasPrefix(p, "~/") {
+		h, _ := os.UserHomeDir()
+		return filepath.Join(h, strings.TrimPrefix(p, "~/"))
+	}
+	return p
+}
+
 func mustDB() string {
 	dir := dataDir()
 	os.MkdirAll(dir, 0o755)
@@ -74,7 +93,14 @@ CREATE TABLE IF NOT EXISTS issues (
   title TEXT NOT NULL, description TEXT DEFAULT '', plan TEXT DEFAULT '',
   review_notes TEXT DEFAULT '', status TEXT DEFAULT 'backlog',
   created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
-  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);`
+  updated_at DATETIME DEFAULT CURRENT_TIMESTAMP);
+CREATE TABLE IF NOT EXISTS attachments (
+  id INTEGER PRIMARY KEY AUTOINCREMENT,
+  issue_id INTEGER NOT NULL REFERENCES issues(id) ON DELETE CASCADE,
+  filename TEXT NOT NULL,
+  mime TEXT NOT NULL,
+  size INTEGER NOT NULL,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP);`
 	if _, err := d.Exec(schema); err != nil {
 		panic(err)
 	}
@@ -276,7 +302,7 @@ func handleAPI() http.Handler {
 			return
 		}
 		_, err := db.Exec(`INSERT OR REPLACE INTO apps (id,name,source,repo_path)
-			VALUES (?,?,COALESCE(?, 'manual'),?)`, a.ID, a.Name, a.Source, a.RepoPath)
+			VALUES (?,?,COALESCE(?, 'manual'),?)`, a.ID, a.Name, a.Source, expandHome(a.RepoPath))
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
@@ -299,7 +325,7 @@ func handleAPI() http.Handler {
 			http.Error(w, "name required", 400)
 			return
 		}
-		res, err := db.Exec(`UPDATE apps SET name=?, repo_path=? WHERE id=?`, name, strings.TrimSpace(a.RepoPath), id)
+		res, err := db.Exec(`UPDATE apps SET name=?, repo_path=? WHERE id=?`, name, expandHome(a.RepoPath), id)
 		if err != nil {
 			http.Error(w, err.Error(), 400)
 			return
@@ -369,10 +395,131 @@ func handleAPI() http.Handler {
 			http.Error(w, "harness may not delete issues", http.StatusForbidden)
 			return
 		}
-		if _, err := db.Exec(`DELETE FROM issues WHERE id=?`, r.PathValue("id")); err != nil {
+		issueID := r.PathValue("id")
+		for _, row := range query(`SELECT id, filename FROM attachments WHERE issue_id=?`, issueID) {
+			ext := filepath.Ext(fmt.Sprint(row["filename"]))
+			if ext == "" {
+				ext = ".jpg"
+			}
+			os.Remove(filepath.Join(attachDir(), fmt.Sprintf("%v%s", row["id"], ext)))
+		}
+		if _, err := db.Exec(`DELETE FROM issues WHERE id=?`, issueID); err != nil {
 			http.Error(w, err.Error(), 400)
 			return
 		}
+		notify()
+		jsonOut(w, map[string]bool{"deleted": true})
+	})
+	mux.HandleFunc("GET /api/issues/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		jsonOut(w, query(`SELECT id, issue_id, filename, mime, size, created_at
+			FROM attachments WHERE issue_id=? ORDER BY id ASC`, r.PathValue("id")))
+	})
+	mux.HandleFunc("POST /api/issues/{id}/attachments", func(w http.ResponseWriter, r *http.Request) {
+		issueID := r.PathValue("id")
+		r.Body = http.MaxBytesReader(w, r.Body, 15<<20)
+		if err := r.ParseMultipartForm(15 << 20); err != nil {
+			http.Error(w, "file too large (max 15MB) or invalid multipart", http.StatusBadRequest)
+			return
+		}
+		file, header, err := r.FormFile("file")
+		if err != nil {
+			http.Error(w, "missing file", http.StatusBadRequest)
+			return
+		}
+		defer file.Close()
+
+		buf := make([]byte, 512)
+		n, _ := file.Read(buf)
+		mime := http.DetectContentType(buf[:n])
+		if ct := header.Header.Get("Content-Type"); ct != "" && strings.HasPrefix(ct, "image/") {
+			mime = ct
+		}
+		if !strings.HasPrefix(mime, "image/") {
+			http.Error(w, "only image attachments are supported", http.StatusBadRequest)
+			return
+		}
+
+		cleanName := filepath.Base(header.Filename)
+		if cleanName == "" || cleanName == "." {
+			cleanName = "photo.jpg"
+		}
+		ext := filepath.Ext(cleanName)
+		if ext == "" {
+			ext = ".jpg"
+		}
+
+		res, err := db.Exec(`INSERT INTO attachments (issue_id, filename, mime, size) VALUES (?, ?, ?, ?)`,
+			issueID, cleanName, mime, header.Size)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		attID, _ := res.LastInsertId()
+		dstPath := filepath.Join(attachDir(), fmt.Sprintf("%d%s", attID, ext))
+		dst, err := os.Create(dstPath)
+		if err != nil {
+			db.Exec(`DELETE FROM attachments WHERE id=?`, attID)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		if _, err := dst.Write(buf[:n]); err != nil {
+			dst.Close()
+			db.Exec(`DELETE FROM attachments WHERE id=?`, attID)
+			os.Remove(dstPath)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		copied, err := io.Copy(dst, file)
+		dst.Close()
+		if err != nil {
+			db.Exec(`DELETE FROM attachments WHERE id=?`, attID)
+			os.Remove(dstPath)
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		totalSize := int64(n) + copied
+		db.Exec(`UPDATE attachments SET size=? WHERE id=?`, totalSize, attID)
+		notify()
+		jsonOut(w, map[string]any{"id": attID, "filename": cleanName, "size": totalSize, "mime": mime})
+	})
+	mux.HandleFunc("GET /api/attachments/{id}", func(w http.ResponseWriter, r *http.Request) {
+		id := r.PathValue("id")
+		rows := query(`SELECT id, filename, mime FROM attachments WHERE id=?`, id)
+		if len(rows) == 0 {
+			http.Error(w, "attachment not found", http.StatusNotFound)
+			return
+		}
+		filename := fmt.Sprint(rows[0]["filename"])
+		mime := fmt.Sprint(rows[0]["mime"])
+		ext := filepath.Ext(filename)
+		if ext == "" {
+			ext = ".jpg"
+		}
+		diskPath := filepath.Join(attachDir(), fmt.Sprintf("%s%s", id, ext))
+		if _, err := os.Stat(diskPath); os.IsNotExist(err) {
+			http.Error(w, "attachment file missing", http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", mime)
+		w.Header().Set("Cache-Control", "public, max-age=86400")
+		http.ServeFile(w, r, diskPath)
+	})
+	mux.HandleFunc("DELETE /api/attachments/{id}", func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("X-Kanban-Human") != "1" {
+			http.Error(w, "harness may not delete attachments", http.StatusForbidden)
+			return
+		}
+		id := r.PathValue("id")
+		rows := query(`SELECT filename FROM attachments WHERE id=?`, id)
+		if len(rows) > 0 {
+			filename := fmt.Sprint(rows[0]["filename"])
+			ext := filepath.Ext(filename)
+			if ext == "" {
+				ext = ".jpg"
+			}
+			os.Remove(filepath.Join(attachDir(), fmt.Sprintf("%s%s", id, ext)))
+		}
+		db.Exec(`DELETE FROM attachments WHERE id=?`, id)
 		notify()
 		jsonOut(w, map[string]bool{"deleted": true})
 	})
@@ -597,7 +744,7 @@ func cli(args []string) {
 				repo = args[3]
 			}
 			id := strings.NewReplacer("-", "_").Replace(strings.ToLower(name))
-			db.Exec(`INSERT OR REPLACE INTO apps (id,name,source,repo_path) VALUES (?,?,'manual',?)`, id, name, repo)
+			db.Exec(`INSERT OR REPLACE INTO apps (id,name,source,repo_path) VALUES (?,?,'manual',?)`, id, name, expandHome(repo))
 			fmt.Println(id)
 		case "sync-projects":
 			root := filepath.Join(os.Getenv("HOME"), "projects")
