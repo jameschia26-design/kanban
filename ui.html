@@ -256,8 +256,8 @@ const api = (path, opts={}) => fetch(PREFIX + path.replace(/^\//, ""), {
 
 let apps = [], current = null, issues = [], counts = {};
 
-// pipeline order: backlog first, then plan ready, fixing, review; empties at the bottom
-const LANES = ["backlog", "plan_ready", "fixing", "review"];
+// pipeline order: backlog first, then plan ready, fixing, review, done; empties at the bottom
+const LANES = ["backlog", "plan_ready", "fixing", "review", "done"];
 const laneCount = (id, lane) => (counts[id] || {})[lane] || 0;
 const openCount = id => (counts[id] || {}).open || 0;
 function orderApps(){
