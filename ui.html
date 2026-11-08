@@ -181,6 +181,13 @@
     <input id="fTitle" required autocomplete="off" placeholder="Short summary of the problem">
     <label for="fDesc">Description</label>
     <textarea id="fDesc" rows="3" placeholder="What is wrong, repro steps, expected behaviour"></textarea>
+    <label>Photos (optional)</label>
+    <div id="newAttachments" class="attachments-list"></div>
+    <div class="attach-actions">
+      <button type="button" class="ghost" id="btnNewAttach" style="padding:4px 9px;font-size:12px">+ Add photo</button>
+      <input type="file" id="newAttachFile" accept="image/*" multiple style="display:none">
+      <span class="attach-hint">or paste / drag image here</span>
+    </div>
     <label for="fPlan">Plan (fills it and moves to Plan Ready)</label>
     <textarea id="fPlan" rows="3" placeholder="Scoped approach — optional"></textarea>
     <div class="err" id="err"></div>
@@ -210,29 +217,43 @@
   <form class="dlg" id="cardForm" method="dialog">
     <h2 id="cTitle"></h2>
     <div class="path" id="cMeta"></div>
-    <label>Description</label>
-    <div id="cDesc" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
-    <div id="attachBox">
-      <label>Attachments</label>
-      <div id="cAttachments" class="attachments-list"></div>
-      <div class="attach-actions">
-        <button type="button" class="ghost" id="btnAttach" style="padding:4px 9px;font-size:12px">+ Add photo</button>
-        <input type="file" id="attachFile" accept="image/*" style="display:none">
-        <span class="attach-hint">or paste / drag image</span>
-        <span id="attachStatus" style="font-size:11.5px;color:var(--accent);margin-left:auto"></span>
+    <div id="viewBox">
+      <label>Description</label>
+      <div id="cDesc" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
+      <div id="attachBox">
+        <label>Attachments</label>
+        <div id="cAttachments" class="attachments-list"></div>
+        <div class="attach-actions">
+          <button type="button" class="ghost" id="btnAttach" style="padding:4px 9px;font-size:12px">+ Add photo</button>
+          <input type="file" id="attachFile" accept="image/*" style="display:none">
+          <span class="attach-hint">or paste / drag image</span>
+          <span id="attachStatus" style="font-size:11.5px;color:var(--accent);margin-left:auto"></span>
+        </div>
+      </div>
+      <div id="planBox">
+        <label>Plan</label>
+        <div id="cPlan" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
+      </div>
+      <div id="reviewBox">
+        <label>Review notes</label>
+        <div id="cNotes" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
       </div>
     </div>
-    <div id="planBox">
-      <label>Plan</label>
-      <div id="cPlan" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
-    </div>
-    <div id="reviewBox">
-      <label>Review notes</label>
-      <div id="cNotes" style="font-size:13px;white-space:pre-wrap;color:var(--text-soft)"></div>
+    <div id="editBox" style="display:none">
+      <label for="eTitle">Title</label>
+      <input id="eTitle" autocomplete="off">
+      <label for="eDesc">Description</label>
+      <textarea id="eDesc" rows="4"></textarea>
+      <label for="ePlan">Plan</label>
+      <textarea id="ePlan" rows="4"></textarea>
+      <div class="err" id="eErr"></div>
     </div>
     <div class="row">
       <button type="button" class="ghost" id="cDelete" style="margin-right:auto;color:var(--danger)">Delete</button>
       <button type="button" class="ghost" id="cClose">Close</button>
+      <button type="button" class="ghost" id="cEdit">Edit</button>
+      <button type="button" class="ghost" id="cCancelEdit" style="display:none">Cancel</button>
+      <button type="button" class="primary" id="cSave" style="display:none">Save</button>
       <button type="button" class="primary" id="cDone">Mark done</button>
     </div>
   </form>
@@ -386,6 +407,7 @@ document.getElementById("newIssue").onclick = () => {
   const sel = document.getElementById("fApp");
   sel.innerHTML = apps.map(a => `<option value="${esc(a.id)}" ${a.id===current?"selected":""}>${esc(a.name)}</option>`).join("");
   document.getElementById("form").reset();
+  clearPendingPhotos();
   document.getElementById("err").textContent = "";
   dlg.showModal();
   if(window.innerWidth > 760) document.getElementById("fTitle").focus();
@@ -447,7 +469,7 @@ document.getElementById("sync").onclick = async () => {
   await api("/api/sync", {method:"POST"});
   await loadApps();
 };
-document.getElementById("cancel").onclick = () => dlg.close();
+document.getElementById("cancel").onclick = () => { clearPendingPhotos(); dlg.close(); };
 document.getElementById("form").onsubmit = async e => {
   e.preventDefault();
   const appId = document.getElementById("fApp").value;
@@ -456,12 +478,19 @@ document.getElementById("form").onsubmit = async e => {
   const plan = document.getElementById("fPlan").value.trim();
   if(!title) return;
   try{
-    await api(`/api/apps/${encodeURIComponent(appId)}/issues`, {
+    const created = await api(`/api/apps/${encodeURIComponent(appId)}/issues`, {
       method:"POST", body: JSON.stringify({title, description, plan, status: plan ? "plan_ready" : "backlog"})
     });
+    const failures = [];
+    for(const f of pendingPhotos){
+      try{ await uploadAttachment(f, created.id); }
+      catch(err){ failures.push(f.name + ": " + err.message); }
+    }
+    clearPendingPhotos();
     dlg.close();
     if(appId !== current){ current = appId; }
     await loadIssues(); await loadApps();
+    if(failures.length) alert("Issue created, but some photos failed to upload:\n" + failures.join("\n"));
   }catch(err){ document.getElementById("err").textContent = err.message; }
 };
 
@@ -506,16 +535,20 @@ async function resizeImageIfNeeded(file){
 }
 
 let uploading = false;
-async function uploadAttachment(file){
-  if(!openId || uploading) return;
+async function uploadAttachment(file, issueId){
+  const target = issueId || openId;
+  if(!target) return;
   const statusEl = document.getElementById("attachStatus");
   try{
-    uploading = true;
-    statusEl.textContent = "Uploading...";
+    if(!issueId){
+      if(uploading) return;
+      uploading = true;
+      statusEl.textContent = "Uploading...";
+    }
     const processed = await resizeImageIfNeeded(file);
     const fd = new FormData();
     fd.append("file", processed, processed.name || "photo.jpg");
-    const res = await fetch(`${PREFIX}api/issues/${openId}/attachments`, {
+    const res = await fetch(`${PREFIX}api/issues/${target}/attachments`, {
       method: "POST",
       headers: {"X-Kanban-Token": TOKEN, "X-Kanban-Human": "1"},
       body: fd
@@ -524,14 +557,66 @@ async function uploadAttachment(file){
       const err = await res.text();
       throw new Error(err || res.status);
     }
-    statusEl.textContent = "";
-    await loadAttachments(openId);
+    if(!issueId){
+      statusEl.textContent = "";
+      await loadAttachments(target);
+    }
   }catch(err){
-    statusEl.textContent = "Upload failed: " + err.message;
+    if(!issueId) statusEl.textContent = "Upload failed: " + err.message;
+    throw err;
   }finally{
-    uploading = false;
+    if(!issueId) uploading = false;
   }
 }
+
+/* photos staged in the new-issue dialog, uploaded right after the issue is created */
+let pendingPhotos = [];
+function renderPendingPhotos(){
+  const box = document.getElementById("newAttachments");
+  box.innerHTML = pendingPhotos.map((f, i) => {
+    const url = URL.createObjectURL(f);
+    return `<div class="att-item">
+      <img src="${url}" alt="${esc(f.name)}" title="${esc(f.name)}">
+      <button type="button" class="att-del" data-drop="${i}" title="Remove">✕</button>
+    </div>`;
+  }).join("");
+  box.querySelectorAll("[data-drop]").forEach(b => {
+    b.onclick = e => {
+      e.preventDefault(); e.stopPropagation();
+      pendingPhotos.splice(Number(b.dataset.drop), 1);
+      renderPendingPhotos();
+    };
+  });
+}
+function addPendingPhoto(file){
+  if(!file || !file.type || !file.type.startsWith("image/")) return;
+  pendingPhotos.push(file);
+  renderPendingPhotos();
+}
+function clearPendingPhotos(){
+  pendingPhotos = [];
+  renderPendingPhotos();
+}
+document.getElementById("btnNewAttach").onclick = () => document.getElementById("newAttachFile").click();
+document.getElementById("newAttachFile").onchange = e => {
+  for(const f of e.target.files || []) addPendingPhoto(f);
+  e.target.value = "";
+};
+dlg.addEventListener("paste", e => {
+  const items = e.clipboardData?.items;
+  if(!items) return;
+  for(const item of items){
+    if(item.type && item.type.indexOf("image") !== -1){
+      const f = item.getAsFile();
+      if(f){ addPendingPhoto(f); e.preventDefault(); break; }
+    }
+  }
+});
+dlg.addEventListener("dragover", e => e.preventDefault());
+dlg.addEventListener("drop", e => {
+  e.preventDefault();
+  for(const f of e.dataTransfer?.files || []) addPendingPhoto(f);
+});
 
 async function loadAttachments(issueId){
   const box = document.getElementById("cAttachments");
@@ -571,7 +656,7 @@ async function loadAttachments(issueId){
 document.getElementById("btnAttach").onclick = () => document.getElementById("attachFile").click();
 document.getElementById("attachFile").onchange = e => {
   const f = e.target.files?.[0];
-  if(f) uploadAttachment(f);
+  if(f) uploadAttachment(f).catch(()=>{});
   e.target.value = "";
 };
 cardDlg.addEventListener("paste", e => {
@@ -581,7 +666,7 @@ cardDlg.addEventListener("paste", e => {
   for(const item of items){
     if(item.type && item.type.indexOf("image") !== -1){
       const f = item.getAsFile();
-      if(f){ uploadAttachment(f); e.preventDefault(); break; }
+      if(f){ uploadAttachment(f).catch(()=>{}); e.preventDefault(); break; }
     }
   }
 });
@@ -590,7 +675,7 @@ cardDlg.addEventListener("drop", e => {
   if(!openId) return;
   e.preventDefault();
   const f = e.dataTransfer?.files?.[0];
-  if(f && f.type && f.type.startsWith("image/")){ uploadAttachment(f); }
+  if(f && f.type && f.type.startsWith("image/")){ uploadAttachment(f).catch(()=>{}); }
 });
 
 function openCard(id){
@@ -606,9 +691,48 @@ function openCard(id){
   document.getElementById("reviewBox").style.display = i.review_notes ? "" : "none";
   document.getElementById("cDone").style.display = i.status === "done" ? "none" : "";
   document.getElementById("attachStatus").textContent = "";
+  setCardEdit(false);
   loadAttachments(openId);
   cardDlg.showModal();
 }
+
+/* edit in place: title, description, plan */
+function setCardEdit(on){
+  document.getElementById("viewBox").style.display = on ? "none" : "";
+  document.getElementById("editBox").style.display = on ? "" : "none";
+  document.getElementById("cEdit").style.display = on ? "none" : "";
+  document.getElementById("cCancelEdit").style.display = on ? "" : "none";
+  document.getElementById("cSave").style.display = on ? "" : "none";
+  document.getElementById("cDone").style.display = on ? "none" : (issues.find(x => x.id === openId)?.status === "done" ? "none" : "");
+  document.getElementById("eErr").textContent = "";
+}
+document.getElementById("cEdit").onclick = () => {
+  const i = issues.find(x => x.id === openId);
+  if(!i) return;
+  document.getElementById("eTitle").value = i.title || "";
+  document.getElementById("eDesc").value = i.description || "";
+  document.getElementById("ePlan").value = i.plan || "";
+  setCardEdit(true);
+  document.getElementById("eTitle").focus();
+};
+document.getElementById("cCancelEdit").onclick = () => setCardEdit(false);
+document.getElementById("cSave").onclick = async () => {
+  const title = document.getElementById("eTitle").value.trim();
+  const description = document.getElementById("eDesc").value.trim();
+  const plan = document.getElementById("ePlan").value.trim();
+  if(!title){ document.getElementById("eErr").textContent = "Title is required"; return; }
+  try{
+    const updated = await api(`/api/issues/${openId}`, {method:"PATCH", body: JSON.stringify({title, description, plan})});
+    const idx = issues.findIndex(x => x.id === openId);
+    if(idx !== -1 && updated) issues[idx] = {...issues[idx], ...updated};
+    document.getElementById("cTitle").textContent = title;
+    document.getElementById("cDesc").textContent = description || "—";
+    document.getElementById("cPlan").textContent = plan || "—";
+    document.getElementById("planBox").style.display = plan ? "" : "none";
+    setCardEdit(false);
+    render();
+  }catch(err){ document.getElementById("eErr").textContent = err.message; }
+};
 document.getElementById("cClose").onclick = () => cardDlg.close();
 document.getElementById("cDelete").onclick = async () => {
   if(!confirm("Delete this issue?")) return;
